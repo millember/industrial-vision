@@ -1,0 +1,17 @@
+{
+  "model_version": "fastener-demo-v1",
+  "image": {
+    "width": 720,
+    "height": 1280
+  },
+  "observation": "FASTENER_PROTRUSION",
+  "confidence": 0.91,
+  "box": [
+    120,
+    340,
+    80,
+    80
+  ],
+  "reason": null,
+  "expected_location_verified": false
+}

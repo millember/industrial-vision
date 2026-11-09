@@ -1,0 +1,22 @@
+{
+  "inspection_id": 504,
+  "equipment_id": 125,
+  "photo_id": 704,
+  "created_at": "2026-11-13T11:32:00Z",
+  "object": "Саморез",
+  "status": "UNKNOWN",
+  "color": "GRAY",
+  "defect_id": null,
+  "defect_code": null,
+  "defect": "Не удалось определить",
+  "box": null,
+  "image": {
+    "width": 720,
+    "height": 1280
+  },
+  "confidence": null,
+  "recommendation": "Участок плохо виден. Повторите снимок или запросите ручную проверку.",
+  "review_status": "UNREVIEWED",
+  "analysis_source": "MODEL",
+  "model_version": "fastener-demo-v1"
+}

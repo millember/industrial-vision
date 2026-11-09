@@ -4,7 +4,7 @@ http:
       rule: Host(`pet.oppennec.ru`) && (Path(`/industrial-vision`) || PathPrefix(`/industrial-vision/`))
       priority: 100
       entryPoints: [websecure]
-      middlewares: [industrial-vision-strip, industrial-vision-limit, industrial-vision-body]
+      middlewares: [industrial-vision-limit, industrial-vision-body]
       service: industrial-vision
       tls:
         certResolver: le
@@ -16,9 +16,6 @@ http:
     industrial-vision-body:
       buffering:
         maxRequestBodyBytes: 65536
-    industrial-vision-strip:
-      stripPrefix:
-        prefixes: [/industrial-vision]
   services:
     industrial-vision:
       loadBalancer:

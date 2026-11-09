@@ -1,0 +1,9 @@
+**/.venv
+**/node_modules
+**/dist
+**/__pycache__
+.git
+.idea
+.playwright-mcp
+.env
+**/private.env

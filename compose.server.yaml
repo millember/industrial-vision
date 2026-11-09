@@ -2,13 +2,20 @@ services:
   backend:
     image: industrial-vision-api:${RELEASE_ID:-local}
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
       args:
         RELEASE_ID: "${RELEASE_ID:-local}"
     restart: unless-stopped
     environment:
+      DATABASE_URL: "postgresql+psycopg://iv_app:${APP_DATABASE_PASSWORD:?database secret required}@database:5432/industrial_vision"
+      COOKIE_SECURE: "true"
+      ALLOWED_ORIGIN: "https://pet.oppennec.ru"
       ROOT_PATH: /industrial-vision
       APP_NAME: "${APP_NAME:-Industrial Vision API}"
+    depends_on:
+      database:
+        condition: service_healthy
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -19,16 +26,41 @@ services:
     mem_limit: 256m
     cpus: 1.0
     networks:
+      data: {}
       proxy:
         aliases:
           - industrial-vision-api
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=2)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 10s
 
+  database:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?database secret required}"
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${IV_PRIVATE_DIR:?private directory required}/init.sql:/docker-entrypoint-initdb.d/001-app.sql:ro
+    networks: [data]
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  postgres-data:
+    name: industrial-vision-postgres-data
+
 networks:
+  data:
+    internal: true
   proxy:
     external: true

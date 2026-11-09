@@ -32,3 +32,7 @@ Thumbs.db
 
 # Browser verification artifacts
 .playwright-mcp/
+
+# Frontend dependencies and local database credentials
+node_modules/
+private.env

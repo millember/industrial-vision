@@ -1,78 +1,81 @@
-# Industrial Vision
+# Industrial Vision — шаг 2
 
-Серверная часть проекта хакатона «Кибер 102»: состояние промышленного оборудования, осмотры и интеграция компьютерного зрения.
+FastAPI + PostgreSQL 17 + React/TypeScript. Зависимости backend — uv, frontend — npm lock.
 
-## Первый шаг
+## Структура
 
-Реализован каркас FastAPI с проверкой работоспособности и Swagger. Подготовлены контракты Android и модели.
-БД, авторизация, приём фотографий и реальный анализ добавляются на следующих шагах.
+- backend/app/domain — ошибки и правила.
+- backend/app/application — use cases, Protocol-порты, frozen DTO; без FastAPI/SQLAlchemy.
+- backend/app/infrastructure — PostgreSQL-репозитории, отдельные queries и Argon2.
+- backend/app/presentation — Pydantic-схемы, HTTP, права, dependency factory.
+- backend/migrations — Alembic-миграции.
+- frontend/src/app — UI и query lifecycle; composition подключает реализации.
+- frontend/src/domain — модели и интерфейс CabinetRepository.
+- frontend/src/data — HTTP и реализация репозитория. UI не импортирует data напрямую.
 
-После публикации:
+Подход взят из RS, фреймворк backend — FastAPI, ORM — SQLAlchemy. Миграции выполняются под PostgreSQL advisory lock.
 
-- Страница проекта: https://pet.oppennec.ru/industrial-vision/
-- Проверка API: https://pet.oppennec.ru/industrial-vision/api/v1/health
-- Swagger: https://pet.oppennec.ru/industrial-vision/docs
-- OpenAPI: https://pet.oppennec.ru/industrial-vision/openapi.json
+## Доступ
 
-Страница и карточки используют существующий React-каталог home-server. API — отдельный сервис этого репозитория.
-При недоступном API страница показывает отсутствие связи, без фиктивного успешного результата.
+Веб-кабинет /industrial-vision/, API-ключи, пользователи и Swagger доступны только администратору после входа.
+POST /api/v1/auth/login создаёт HttpOnly/Secure/SameSite=Strict cookie на 8 часов.
+Операции браузера требуют Origin и X-IV-Client: browser. Вход ограничен после пяти неверных попыток на пять минут.
+Пароли — Argon2, токены и ключи хранятся только в SHA-256-хешах. Новый API-ключ показывается один раз, действует 1–365 дней, немедленно отзывается.
 
-## Стек
+Обычный сотрудник получает токен через POST /api/v1/auth/token и использует Android/API. Он не входит в веб-кабинет, не видит ключи/Swagger и читает оборудование только своего цеха.
+Минимальный /healthz открыт для Docker healthcheck; /api/v1/health требует авторизацию.
 
-Python 3.12, FastAPI, Uvicorn, uv, Docker Compose. Зависимости объявлены в backend/pyproject.toml и зафиксированы в backend/uv.lock.
-
-## Локальный запуск через uv
-
-Из корня проекта:
-
-```bash
-uv sync --directory backend --locked
-uv run --directory backend --locked uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Health: http://127.0.0.1:8000/api/v1/health, Swagger: http://127.0.0.1:8000/docs.
-
-## Локальный Docker
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Это режим разработки с reload и bind mount исходников. API_PORT в .env задаёт порт ноутбука, по умолчанию 8000.
-Остановка: `docker compose down`.
+Администратор добавляет пользователей (логин, пароль от 12 символов, имя, роль, цех), цеха, типы оборудования, оборудование и виды неисправностей. Наблюдения/фото/ИИ — следующие шаги.
 
 ## Сервер
 
-`compose.server.yaml` использует сеть proxy существующего Traefik. Порты хоста и исходники не монтируются, reload отключён.
-Образ собирается через `uv sync --frozen --no-dev`, работает от UID/GID 10001 с read-only корневой ФС.
-ROOT_PATH=/industrial-vision обеспечивает корректные ссылки Swagger после удаления префикса маршрутизатором.
+Страница: https://pet.oppennec.ru/industrial-vision/
+Swagger после входа: https://pet.oppennec.ru/industrial-vision/docs
+Схема после входа: https://pet.oppennec.ru/industrial-vision/openapi.json
 
-Релиз хранится в ~/services/industrial-vision/releases/<commit>/. REVISION и SHA256SUMS проверяются до запуска.
-release.env задаёт RELEASE_ID для тега образа и его revision label. Это генерируемые метаданные релиза, не файл с секретами.
-Точный путь релиза выбирается при публикации; из него на сервере запускается:
+Подготовленный релиз запускается на сервере:
 
 ```bash
-sudo docker compose -p industrial-vision --env-file release.env -f compose.server.yaml up -d --build --wait
+sudo ~/services/industrial-vision/start
 ```
 
-Запуск требует отсутствия чужой блокировки ~/services/.home-server-deploy-lock и выполняется под этой общей блокировкой.
-После готовности контейнера deploy/traefik.yaml атомарно устанавливается как отдельный dynamic/industrial-vision.yaml.
-Карточки и страница публикуются штатной сборкой/синхронизацией каталога; публикация фронтенда не запускает backend.
+Первого администратора niyaz создать в терминале сервера:
 
-## Документы
-
-- [Архитектура](docs/architecture.md)
-- [Общий план команды](INDUSTRIAL_VISION_PLAN.md)
-- [План Нияза](INDUSTRIAL_VISION_BACKEND_NIYAZ.md)
-- [Контракт Android](docs/api_contract.md)
-- [Контракт модели](docs/model_contract.md)
-- [Критерии первого запуска](docs/steps/01-bootstrap.md)
-
-## Текущий API
-
-```http
-GET /api/v1/health
+```bash
+sudo ~/services/industrial-vision/start admin
 ```
 
-Ответ: `{"status": "ok"}`. /docs и /openapi.json генерирует FastAPI.
+Пароль вводится интерактивно и не передаётся в командной строке. Затем войдите на странице. Новые пользователи создаются из кабинета.
+Данные PostgreSQL сохраняются в volume industrial-vision-postgres-data. Порты БД не публикуются, backend работает с отдельным несуперпользователем iv_app.
+Пароли БД генерирует start только на сервере в закрытом private/database.env; повторный запуск их не меняет. Не удаляйте volume при обновлении.
+
+## Разработка
+
+```bash
+uv sync --directory backend --locked
+```
+
+Задайте DATABASE_URL для отдельной PostgreSQL-БД разработки, ROOT_PATH=/industrial-vision, COOKIE_SECURE=false, ALLOWED_ORIGIN=http://127.0.0.1:5173.
+
+```bash
+uv run --directory backend uvicorn app.main:app --reload
+npm ci --prefix frontend
+npm run dev --prefix frontend
+```
+
+Dev frontend проксирует API на 127.0.0.1:8000. Production образ собирает frontend и backend из корня проекта. Серверный Compose требует сгенерированные start настройки БД и существующую сеть proxy.
+
+## Проверки
+
+backend/tests/test_access.py запускается только с IV_TEST_DATABASE_URL, указывающим на изолированную БД iv_step2_test (таблицы очищаются перед тестами).
+
+```bash
+uv run --directory backend python -m pytest tests/test_access.py -q
+npm run build --prefix frontend
+go test -parallel 4 deploy/start.go deploy/start_test.go
+go vet deploy/start.go
+```
+
+## Телефон
+
+В кабинете есть раздел «Телефон» с адресом API, примером входа сотрудника, Bearer-заголовком и примером Java. HTTPS используется без отключения проверки сертификата. Ключи и пароли не встраиваются в APK и не пишутся в логи.

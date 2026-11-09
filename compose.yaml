@@ -1,16 +1,2 @@
-services:
-  backend:
-    build: ./backend
-    ports:
-      - "${API_PORT:-8000}:8000"
-    environment:
-      APP_NAME: "${APP_NAME:-Industrial Vision API}"
-    volumes:
-      - ./backend/app:/app/app
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
+include:
+  - compose.server.yaml

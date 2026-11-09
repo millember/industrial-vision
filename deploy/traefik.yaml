@@ -1,0 +1,19 @@
+http:
+  routers:
+    industrial-vision:
+      rule: Host(`pet.oppennec.ru`) && (PathPrefix(`/industrial-vision/api/`) || PathPrefix(`/industrial-vision/docs`) || Path(`/industrial-vision/openapi.json`) || Path(`/industrial-vision/redoc`))
+      priority: 100
+      entryPoints: [websecure]
+      middlewares: [industrial-vision-strip]
+      service: industrial-vision
+      tls:
+        certResolver: le
+  middlewares:
+    industrial-vision-strip:
+      stripPrefix:
+        prefixes: [/industrial-vision]
+  services:
+    industrial-vision:
+      loadBalancer:
+        servers:
+          - url: http://industrial-vision-api:8000

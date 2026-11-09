@@ -13,6 +13,7 @@ env/
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Test and tool caches
 .pytest_cache/
@@ -28,3 +29,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Browser verification artifacts
+.playwright-mcp/

@@ -1,0 +1,34 @@
+services:
+  backend:
+    image: industrial-vision-api:${RELEASE_ID:-local}
+    build:
+      context: ./backend
+      args:
+        RELEASE_ID: "${RELEASE_ID:-local}"
+    restart: unless-stopped
+    environment:
+      ROOT_PATH: /industrial-vision
+      APP_NAME: "${APP_NAME:-Industrial Vision API}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 1.0
+    networks:
+      proxy:
+        aliases:
+          - industrial-vision-api
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+networks:
+  proxy:
+    external: true

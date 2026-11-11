@@ -1,4 +1,4 @@
-"""Provision the first administrator interactively; never accept passwords in argv."""
+"""Interactive account provisioning; never accept passwords in argv."""
 import argparse
 import getpass
 import sys
@@ -8,9 +8,23 @@ from .infrastructure.passwords import Passwords
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("command",choices=["create-admin"])
+    parser.add_argument("command",choices=["create-admin", "seed-demo"])
     parser.add_argument("--login",default="niyaz")
     args=parser.parse_args()
+    if args.command == "seed-demo":
+        import json
+        from .infrastructure.demo import seed_demo
+        password = getpass.getpass("Пароль демонстрационных сотрудников (от 12 символов): ")
+        if password != getpass.getpass("Повторите пароль: "):
+            parser.error("Пароли не совпадают")
+        engine = make_engine(database_url())
+        try:
+            migrate(engine)
+            result = seed_demo(sessions(engine), password)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        finally:
+            engine.dispose()
+        return
     import re
     login=args.login.strip().lower()
     if not re.fullmatch(r"[a-z0-9_.-]{1,80}",login):parser.error("Invalid login")

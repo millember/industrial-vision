@@ -1,4 +1,4 @@
-# Industrial Vision — шаг 9 backend
+# Industrial Vision — локальная приёмка шага 10
 
 FastAPI + PostgreSQL 17 + React/TypeScript. Зависимости backend — uv, frontend — npm lock.
 
@@ -145,6 +145,10 @@ npm run dev --prefix frontend
 Dev frontend проксирует API на 127.0.0.1:8000. Production образ собирает frontend и backend из корня проекта. Серверный Compose требует сгенерированные start настройки БД и существующую сеть proxy.
 
 ## Проверки
+
+[Итоги приёмки, демоданные и сценарий показа](docs/steps/10-acceptance.md). Backend проверен на PostgreSQL 17; production-образ — через отдельный локальный Traefik. Активация нового релиза на рабочем сервере и проверка Android остаются отдельными действиями.
+
+Команда `python -m app.manage seed-demo` при `ANALYSIS_MODE=mock` создаёт явные синтетические примеры и сотрудников demo_worker/demo_master/demo_engineer/demo_foreign. Пароль вводится интерактивно, повтор не меняет существующие учётные записи. Обычная загрузка фото остаётся `MOCK/UNKNOWN`.
 
 backend/tests/test_access.py запускается только с IV_TEST_DATABASE_URL, указывающим на изолированную БД iv_step2_test (таблицы очищаются перед тестами).
 

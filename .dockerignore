@@ -6,4 +6,6 @@
 .idea
 .playwright-mcp
 .env
+**/.env.*
+**/var/photos
 **/private.env

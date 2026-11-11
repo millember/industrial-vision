@@ -1,5 +1,13 @@
 http:
   routers:
+    industrial-vision-upload:
+      rule: Host(`pet.oppennec.ru`) && Method(`POST`) && (Path(`/industrial-vision/api/v1/inspections`) || Path(`/industrial-vision/api/v1/inspections/preview`))
+      priority: 110
+      entryPoints: [websecure]
+      middlewares: [industrial-vision-limit, industrial-vision-upload-concurrency, industrial-vision-upload-body]
+      service: industrial-vision
+      tls:
+        certResolver: le
     industrial-vision:
       rule: Host(`pet.oppennec.ru`) && (Path(`/industrial-vision`) || PathPrefix(`/industrial-vision/`))
       priority: 100
@@ -9,6 +17,12 @@ http:
       tls:
         certResolver: le
   middlewares:
+    industrial-vision-upload-concurrency:
+      inFlightReq:
+        amount: 2
+    industrial-vision-upload-body:
+      buffering:
+        maxRequestBodyBytes: 10551296
     industrial-vision-limit:
       rateLimit:
         average: 5

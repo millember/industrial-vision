@@ -183,11 +183,14 @@ func run(ctx context.Context) (code int) {
 	args := []string{"compose", "-p", "industrial-vision", "--env-file", privateEnv, "--env-file", "release.env", "-f", "compose.server.yaml"}
 	actions := [][]string{{"config", "--quiet"}, {"up", "-d", "--build", "--wait", "--wait-timeout", "90"}}
 	if len(os.Args) > 1 {
-		if len(os.Args) != 2 || os.Args[1] != "admin" {
-			fmt.Fprintln(os.Stderr, "Usage: start [admin]")
+		if len(os.Args) != 2 || (os.Args[1] != "admin" && os.Args[1] != "demo") {
+			fmt.Fprintln(os.Stderr, "Usage: start [admin|demo]")
 			return 2
 		}
 		actions = [][]string{{"exec", "backend", "python", "-m", "app.manage", "create-admin", "--login", "niyaz"}}
+		if os.Args[1] == "demo" {
+			actions = [][]string{{"exec", "backend", "python", "-m", "app.manage", "seed-demo"}}
+		}
 	}
 	for _, action := range actions {
 		command := exec.CommandContext(ctx, "docker", append(append([]string{}, args...), action...)...)

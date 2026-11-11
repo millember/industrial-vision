@@ -159,3 +159,50 @@ def test_inactive_user_cannot_renew_session(client):
     with factory() as db:
         assert db.scalar(select(BrowserSession.expires_at)) == original
     engine.dispose()
+
+@pytest.mark.parametrize("role", ["WORKER", "MASTER", "ENGINEER", "HEAD", "ADMIN"])
+def test_equipment_card_and_knowledge_access(client, role):
+    admin(client)
+    workshop_ids = [
+        client.post("/api/v1/workshops", json={"name": name}, headers=HEADERS).json()["id"]
+        for name in ("Цех 1", "Цех 2")
+    ]
+    type_id = client.post("/api/v1/equipment-types", json={"name":"Макет"}, headers=HEADERS).json()["id"]
+    cards = []
+    for i, workshop_id in enumerate(workshop_ids):
+        values = {"name":"Макет узла", "inventory_number":f"DEMO-{i}",
+                  "workshop_id":workshop_id, "type_id":type_id, "passport":"Демонстрационный макет, крепление М6."}
+        response = client.post("/api/v1/equipment", json=values, headers=HEADERS)
+        assert response.status_code == 201
+        cards.append({"id":response.json()["id"], **values})
+    defects = []
+    for status, name, recommendation in (
+        ("WARNING", "Недокручен", "На демонстрационном макете докрутить крепёж."),
+        ("CRITICAL", "Отсутствует", "Проверить крепление демонстрационного макета."),
+    ):
+        values = {"name":name, "status":status, "recommendation":recommendation}
+        response = client.post("/api/v1/defect-types", json=values, headers=HEADERS)
+        assert response.status_code == 201
+        defects.append({"id":response.json()["id"], **values})
+    # The browser administrator can read equipment from either workshop.
+    for card in cards:
+        response = client.get(f"/api/v1/equipment/{card['id']}")
+        assert response.status_code == 200
+        assert response.json() == card
+    user = {"login":"reader", "password":PASSWORD, "full_name":"Читатель", "role":role,
+            "workshop_id":None if role == "ADMIN" else workshop_ids[0]}
+    assert client.post("/api/v1/users", json=user, headers=HEADERS).status_code == 201
+    client.cookies.clear()
+    assert client.get(f"/api/v1/equipment/{cards[0]['id']}").status_code == 401
+    assert client.get("/api/v1/defect-types").status_code == 401
+    token = client.post("/api/v1/auth/token", json={"login":"reader", "password":PASSWORD}).json()["access_token"]
+    headers = {"Authorization":"Bearer " + token}
+    assert client.get(f"/api/v1/equipment/{cards[0]['id']}", headers=headers).json() == cards[0]
+    missing = client.get("/api/v1/equipment/999999", headers=headers)
+    assert missing.status_code == 404
+    other = client.get(f"/api/v1/equipment/{cards[1]['id']}", headers=headers)
+    if role == "ADMIN":
+        assert other.status_code == 200 and other.json() == cards[1]
+    else:
+        assert other.status_code == 404 and other.json() == missing.json()
+    assert client.get("/api/v1/defect-types", headers=headers).json() == defects

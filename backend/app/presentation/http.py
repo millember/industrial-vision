@@ -164,6 +164,9 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
     def types(request: Request, user: Member): return request.app.state.services.queries.catalogue(kind="equipment-types",actor=user)
     @app.get("/api/v1/equipment", response_model=list[EquipmentOut])
     def equipment(request: Request, user: Member): return request.app.state.services.queries.catalogue(kind="equipment",actor=user)
+    @app.get("/api/v1/equipment/{equipment_id}", response_model=EquipmentOut)
+    def equipment_card(equipment_id: int, request: Request, user: Member):
+        return request.app.state.services.queries.equipment(equipment_id=equipment_id, actor=user)
     @app.get("/api/v1/defect-types", response_model=list[DefectOut])
     def defects(request: Request, user: Member): return request.app.state.services.queries.catalogue(kind="defect-types",actor=user)
     @app.post("/api/v1/workshops", status_code=201, dependencies=[Depends(csrf)])

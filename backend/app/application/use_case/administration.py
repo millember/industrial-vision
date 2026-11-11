@@ -2,6 +2,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from app.application.auth import digest, Passwords
 from app.application.contracts import Account
+from app.application.dtos.rows import EquipmentRow
 from app.application.ports.admin import AdminRepositoryPort, AdminQueryPort
 from app.domain.errors import InvalidInput, Missing
 
@@ -44,3 +45,8 @@ class AdminQueriesUseCase:
     def keys(self, *, actor_id: int): return self.queries.keys(actor_id)
     def users(self): return self.queries.users()
     def catalogue(self, *, kind: str, actor: Account): return self.queries.catalogue(kind,actor)
+    def equipment(self, *, equipment_id: int, actor: Account) -> EquipmentRow:
+        row = self.queries.equipment(equipment_id, actor)
+        if row is None:
+            raise Missing("Оборудование не найдено")
+        return row

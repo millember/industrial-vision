@@ -6,6 +6,14 @@ from app.infrastructure.catalogue import CATALOGUE
 
 class AdminQueries:
     def __init__(self, sessions):self.sessions=sessions
+    def equipment(self, equipment_id: int, user: Account) -> EquipmentRow | None:
+        query = select(Equipment).where(Equipment.id == equipment_id)
+        if user.role != "ADMIN":
+            query = query.where(Equipment.workshop_id == user.workshop_id)
+        with self.sessions() as db:
+            row = db.scalar(query)
+            return EquipmentRow(row.id, row.name, row.inventory_number, row.workshop_id, row.type_id, row.passport) if row else None
+
     def keys(self, user_id:int)->tuple[KeyRow,...]:
         with self.sessions() as db:
             return tuple(KeyRow(r.id,r.name,r.prefix,r.created_at,r.expires_at,r.revoked)

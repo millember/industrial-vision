@@ -10,6 +10,7 @@ from app.domain.reporting import NOTIFICATION_ROLES, can_report
 from app.domain.reviews import reviewed_result
 from .models import Inspection, Equipment, DefectType, Issue, Report, ReportRequest, Notification, User, Audit, Review
 from .queries.reporting import notification_scope, NOTIFICATION_COLUMNS
+from .issue_lock import lock_issue_group
 
 
 class PostgresReportingRepository:
@@ -44,6 +45,7 @@ class PostgresReportingRepository:
                 return InspectionResponse(409, body)
             issue_values = {"equipment_id":inspection.equipment_id, "workshop_id":inspection.workshop_id,
                             "defect_type_id":result["defect_id"], "analysis_source":result["analysis_source"]}
+            lock_issue_group(db, inspection.equipment_id, inspection.workshop_id, result["defect_id"], result["analysis_source"])
             conditions = tuple(getattr(Issue, field) == value for field, value in issue_values.items())
             for _ in range(2):
                 closed_at = db.scalar(select(func.max(Issue.closed_at)).where(*conditions))

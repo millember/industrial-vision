@@ -6,6 +6,7 @@ from app.application.dtos.inspections import InspectionResponse
 from app.domain.errors import AnalysisError
 from .models import Review, WorkflowRequest, Inspection, Issue, Report, Audit
 from .queries.reviews import scoped_inspection, scoped_issue
+from .issue_lock import lock_issue_group
 
 
 class PostgresReviewRepository:
@@ -64,7 +65,8 @@ class PostgresReviewRepository:
               verification_review_id: int, expected_report_id: int, resolution: str) -> InspectionResponse:
         with self.sessions.begin() as db:
             query = scoped_issue(issue_id, actor)
-            if db.scalar(query) is None:
+            initial_issue = db.scalar(query)
+            if initial_issue is None:
                 raise AnalysisError("NOT_FOUND", "Проблема не найдена")
             if actor.role not in ("MASTER", "ENGINEER"):
                 raise AnalysisError("FORBIDDEN", "Закрытие доступно мастеру или инженеру своего цеха")
@@ -73,6 +75,7 @@ class PostgresReviewRepository:
                 return cached
             review = db.get(Review, verification_review_id)
             proof = db.scalar(scoped_inspection(review.inspection_id, actor).with_for_update(of=Inspection)) if review else None
+            lock_issue_group(db, initial_issue.equipment_id, initial_issue.workshop_id, initial_issue.defect_type_id, initial_issue.analysis_source)
             issue = db.scalar(query.with_for_update(of=Issue).execution_options(populate_existing=True))
             if issue is None:
                 raise AnalysisError("NOT_FOUND", "Проблема не найдена")

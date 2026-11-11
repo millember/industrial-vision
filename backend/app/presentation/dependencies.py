@@ -14,6 +14,9 @@ from app.infrastructure.photo_storage import photo_storages
 from app.application.use_case.reporting import ReportingUseCase
 from app.infrastructure.reporting import PostgresReportingRepository
 from app.infrastructure.queries.reporting import PostgresReportingQueries
+from app.application.use_case.reviews import ReviewUseCase
+from app.infrastructure.reviews import PostgresReviewRepository
+from app.infrastructure.queries.reviews import PostgresReviewQueries
 
 @dataclass(frozen=True)
 class Services:
@@ -26,6 +29,7 @@ class Services:
     preview: PreviewInspectionUseCase
     inspections: InspectionsUseCase
     reporting: ReportingUseCase
+    reviews: ReviewUseCase
 
 def create_services(*, session_factory, analysis_mode: str = "disabled") -> Services:
     if analysis_mode not in ("disabled", "mock"):
@@ -38,6 +42,7 @@ def create_services(*, session_factory, analysis_mode: str = "disabled") -> Serv
     records = PostgresInspectionRepository(session_factory)
     records.recover_stale()
     storage_backend, storages = photo_storages()
+    review_queries = PostgresReviewQueries(session_factory)
     return Services(
         auth=AuthService(repository,passwords),
         users=CreateUserUseCase(users=repository,passwords=passwords),
@@ -48,6 +53,7 @@ def create_services(*, session_factory, analysis_mode: str = "disabled") -> Serv
         preview=preview,
         inspections=InspectionsUseCase(catalogue=queries, records=records,
                                       queries=PostgresInspectionQueries(session_factory, records), analyzer=preview,
-                                      storage_backend=storage_backend, storages=storages),
+                                      storage_backend=storage_backend, storages=storages, reviews=review_queries),
         reporting=ReportingUseCase(records=PostgresReportingRepository(session_factory), queries=PostgresReportingQueries(session_factory)),
+        reviews=ReviewUseCase(records=PostgresReviewRepository(session_factory), queries=review_queries),
     )

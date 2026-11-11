@@ -8,13 +8,16 @@ from app.application.ports.admin import AdminQueryPort
 from app.application.ports.inspections import InspectionRepository, InspectionQueries, PhotoStorage
 from app.application.use_case.preview import PreviewInspectionUseCase
 from app.domain.errors import AnalysisError
+from app.domain.reviews import reviewed_result
+from app.application.ports.reviews import ReviewQueries
 
 
 class InspectionsUseCase:
     def __init__(self, *, catalogue: AdminQueryPort, records: InspectionRepository, queries: InspectionQueries,
-                 analyzer: PreviewInspectionUseCase, storage_backend: str, storages: dict[str, PhotoStorage]):
+                 analyzer: PreviewInspectionUseCase, storage_backend: str, storages: dict[str, PhotoStorage], reviews: ReviewQueries):
         self.catalogue, self.records, self.queries, self.analyzer = catalogue, records, queries, analyzer
         self.storage_backend, self.storages = storage_backend, storages
+        self.reviews = reviews
 
     def create(self, *, equipment_id: int, source: str, content: bytes, key: str, actor: Account) -> InspectionResponse:
         equipment = self.catalogue.equipment(equipment_id, actor)
@@ -68,7 +71,8 @@ class InspectionsUseCase:
         if record is None:
             raise AnalysisError("NOT_FOUND", "Осмотр не найден")
         response = self.response(record)
-        return InspectionResponse(200 if response.status == 201 else response.status, response.body)
+        body = reviewed_result(response.body, self.reviews.latest((inspection_id,)).get(inspection_id)) if response.status == 201 else response.body
+        return InspectionResponse(200 if response.status == 201 else response.status, body)
 
     def photo(self, *, photo_id: int, actor: Account) -> tuple[bytes, str]:
         record = self.queries.get(photo_id, actor)
@@ -88,7 +92,9 @@ class InspectionsUseCase:
         if self.catalogue.equipment(equipment_id, actor) is None:
             raise AnalysisError("NOT_FOUND", "Оборудование не найдено")
         records, total = self.queries.history(equipment_id, actor, limit, offset)
+        reviews = self.reviews.latest(tuple(row.id for row in records))
         items = [{"inspection_id":row.id, "equipment_id":row.equipment_id, "author_id":row.author_id,
                   "workshop_id":row.workshop_id, "source":row.source, "created_at":row.created_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
-                  "processing_status":row.processing_status, "result":row.result, "error":row.error} for row in records]
+                  "processing_status":row.processing_status,
+                  "result":reviewed_result(row.result, reviews.get(row.id)) if row.result is not None else None, "error":row.error} for row in records]
         return {"items":items, "total":total, "limit":limit, "offset":offset}

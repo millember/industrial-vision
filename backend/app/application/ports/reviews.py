@@ -1,0 +1,16 @@
+from typing import Protocol
+from app.application.contracts import Account
+from app.application.dtos.inspections import InspectionResponse
+
+
+class ReviewRepository(Protocol):
+    def review(self, *, inspection_id: int, actor: Account, key: str, request_hash: str, decision: str,
+               status: str, comment: str, expected_review_id: int | None) -> InspectionResponse: ...
+    def close(self, *, issue_id: int, actor: Account, key: str, request_hash: str, reason: str,
+              verification_review_id: int, expected_report_id: int, resolution: str) -> InspectionResponse: ...
+
+
+class ReviewQueries(Protocol):
+    def latest(self, inspection_ids: tuple[int, ...]) -> dict[int, dict]: ...
+    def history(self, inspection_id: int, actor: Account, limit: int, offset: int) -> tuple[tuple[dict, ...], int]: ...
+    def issue(self, issue_id: int, actor: Account) -> dict | None: ...

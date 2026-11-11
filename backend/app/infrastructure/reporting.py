@@ -7,7 +7,8 @@ from app.application.dtos.inspections import InspectionResponse
 from app.application.dtos.reporting import NotificationRow
 from app.domain.errors import AnalysisError
 from app.domain.reporting import NOTIFICATION_ROLES, can_report
-from .models import Inspection, Equipment, DefectType, Issue, Report, ReportRequest, Notification, User, Audit
+from app.domain.reviews import reviewed_result
+from .models import Inspection, Equipment, DefectType, Issue, Report, ReportRequest, Notification, User, Audit, Review
 from .queries.reporting import notification_scope, NOTIFICATION_COLUMNS
 
 
@@ -35,18 +36,29 @@ class PostgresReportingRepository:
             inspection = db.scalar(query.with_for_update(of=Inspection).execution_options(populate_existing=True))
             if inspection is None:
                 raise AnalysisError("NOT_FOUND", "Осмотр не найден")
-            if not can_report(inspection.processing_status, inspection.result) or db.get(DefectType, inspection.result["defect_id"]) is None:
+            latest_review = db.scalar(select(Review.body).where(Review.inspection_id == inspection_id).order_by(Review.id.desc()).limit(1))
+            result = reviewed_result(inspection.result, latest_review) if inspection.result is not None else None
+            if not can_report(inspection.processing_status, result) or db.get(DefectType, result["defect_id"]) is None:
                 body = {"error":{"code":"REPORT_NOT_APPLICABLE", "message":"Сообщение доступно только для завершённого WARNING/CRITICAL-осмотра с известным дефектом"}}
                 db.add(ReportRequest(author_id=actor.id, inspection_id=inspection_id, key=key, request_hash=request_hash, response_status=409, body=body))
                 return InspectionResponse(409, body)
-            result = inspection.result
             issue_values = {"equipment_id":inspection.equipment_id, "workshop_id":inspection.workshop_id,
                             "defect_type_id":result["defect_id"], "analysis_source":result["analysis_source"]}
-            issue_id = db.scalar(insert(Issue).values(**issue_values).on_conflict_do_nothing(
-                index_elements=[Issue.equipment_id, Issue.workshop_id, Issue.defect_type_id, Issue.analysis_source],
-                index_where=Issue.closed_at.is_(None)).returning(Issue.id))
-            if issue_id is None:
-                issue_id = db.scalar(select(Issue.id).where(*(getattr(Issue, field) == value for field, value in issue_values.items()), Issue.closed_at.is_(None)))
+            conditions = tuple(getattr(Issue, field) == value for field, value in issue_values.items())
+            for _ in range(2):
+                closed_at = db.scalar(select(func.max(Issue.closed_at)).where(*conditions))
+                if closed_at is not None and inspection.created_at <= closed_at:
+                    body = {"error":{"code":"REPORT_NOT_APPLICABLE", "message":"После закрытия проблемы нужен новый осмотр"}}
+                    db.add(ReportRequest(author_id=actor.id, inspection_id=inspection_id, key=key, request_hash=request_hash, response_status=409, body=body))
+                    return InspectionResponse(409, body)
+                issue_id = db.scalar(insert(Issue).values(**issue_values).on_conflict_do_update(
+                    index_elements=[Issue.equipment_id, Issue.workshop_id, Issue.defect_type_id, Issue.analysis_source],
+                    index_where=Issue.closed_at.is_(None), set_={"equipment_id":inspection.equipment_id},
+                    where=Issue.closed_at.is_(None)).returning(Issue.id))
+                if issue_id is not None:
+                    break
+            else:
+                raise AnalysisError("REQUEST_IN_PROGRESS", "Проблема изменяется. Повторите запрос.")
             report = Report(inspection_id=inspection_id, issue_id=issue_id, author_id=actor.id,
                             workshop_id=inspection.workshop_id, equipment_id=inspection.equipment_id, comment=comment, body={})
             db.add(report)

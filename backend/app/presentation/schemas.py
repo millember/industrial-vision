@@ -42,6 +42,23 @@ class AccountOut(BaseModel):
     full_name:str
     role:str
     workshop_id:int|None
+
+
+class MobileTokenOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"]
+    expires_in: int
+    user: AccountOut
+
+
+class IdOut(BaseModel):
+    id: int
+
+
+class HealthOut(BaseModel):
+    status: Literal["ok"]
+
+
 class UserOut(AccountOut):
     active:bool
 class KeyOut(BaseModel):
@@ -104,6 +121,66 @@ class InspectionOut(PreviewOut):
     workshop_id: int
 
 
+class ReviewOut(BaseModel):
+    review_id: int
+    inspection_id: int
+    decision: Literal["CONFIRMED", "REJECTED"]
+    status: Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]
+    comment: str
+    author_id: int
+    author_name: str
+    previous_review_id: int | None
+    created_at: datetime
+
+
+class InspectionDetailOut(InspectionOut):
+    original_result: InspectionOut | None = None
+    latest_review: ReviewOut | None = None
+
+
+class NewReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["CONFIRMED", "REJECTED"]
+    status: Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]
+    comment: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    expected_review_id: int | None = Field(..., gt=0, strict=True)
+
+
+class ReviewsOut(BaseModel):
+    items: list[ReviewOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class CloseIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=2000, pattern=r"\S")
+    verification_review_id: int = Field(gt=0, strict=True)
+    expected_report_id: int = Field(gt=0, strict=True)
+    resolution: Literal["REPAIRED", "FALSE_ALARM"] = "REPAIRED"
+
+
+class IssueOut(BaseModel):
+    issue_id: int
+    equipment_id: int
+    workshop_id: int
+    defect_id: int
+    analysis_source: Literal["MOCK", "MODEL"]
+    created_at: datetime
+    latest_report_id: int | None
+    closed_at: datetime | None
+    closed_by: int | None
+    close_review_id: int | None
+    close_reason: str | None
+    resolution: Literal["REPAIRED", "FALSE_ALARM"] | None
+
+    @field_serializer("created_at", "closed_at")
+    def utc_time(self, value: datetime | None) -> str | None:
+        from datetime import timezone
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if value is not None else None
+
+
 class AnalysisErrorOut(BaseModel):
     code: str
     message: str
@@ -121,7 +198,7 @@ class HistoryItemOut(BaseModel):
     source: Literal["CAMERA", "GALLERY"]
     created_at: datetime
     processing_status: Literal["PROCESSING", "COMPLETED", "FAILED"]
-    result: InspectionOut | None
+    result: InspectionDetailOut | None
     error: ErrorEnvelope | None
 
 

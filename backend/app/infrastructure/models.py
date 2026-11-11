@@ -115,6 +115,10 @@ class Issue(Base):
     analysis_source: Mapped[str] = mapped_column(String(8))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    close_review_id: Mapped[int | None] = mapped_column(ForeignKey("reviews.id"))
+    close_reason: Mapped[str | None] = mapped_column(Text)
+    resolution: Mapped[str | None] = mapped_column(String(16))
     __table_args__ = (CheckConstraint("analysis_source IN ('MOCK', 'MODEL')", name="ck_issue_source"),)
 
 
@@ -163,3 +167,37 @@ class Notification(Base):
 
 
 Index("ix_notifications_recipient_created", Notification.recipient_id, Notification.created_at.desc(), Notification.id.desc())
+
+
+class Review(Base):
+    __tablename__ = "reviews"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    inspection_id: Mapped[int] = mapped_column(ForeignKey("inspections.id"))
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    workshop_id: Mapped[int] = mapped_column(ForeignKey("workshops.id"))
+    decision: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16))
+    comment: Mapped[str] = mapped_column(String(2000))
+    previous_review_id: Mapped[int | None] = mapped_column(ForeignKey("reviews.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.clock_timestamp())
+    body: Mapped[dict] = mapped_column(JSONB)
+    __table_args__ = (CheckConstraint("(decision = 'CONFIRMED' AND status IN ('OK','WARNING','CRITICAL')) OR (decision = 'REJECTED' AND status = 'UNKNOWN')", name="ck_review_decision"),)
+
+
+Index("ix_reviews_inspection_id", Review.inspection_id, Review.id.desc())
+Index("uq_review_first", Review.inspection_id, unique=True, postgresql_where=Review.previous_review_id.is_(None))
+Index("uq_review_successor", Review.previous_review_id, unique=True, postgresql_where=Review.previous_review_id.is_not(None))
+
+
+class WorkflowRequest(Base):
+    __tablename__ = "workflow_requests"
+    __table_args__ = (UniqueConstraint("author_id", "action", "target_id", "key", name="uq_workflow_request"),
+                      CheckConstraint("action IN ('review', 'close')", name="ck_workflow_action"))
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    action: Mapped[str] = mapped_column(String(16))
+    target_id: Mapped[int] = mapped_column(Integer)
+    key: Mapped[str] = mapped_column(String(36))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_status: Mapped[int] = mapped_column(Integer)
+    body: Mapped[dict] = mapped_column(JSONB)

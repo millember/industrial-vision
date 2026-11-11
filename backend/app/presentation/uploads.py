@@ -54,9 +54,9 @@ PREVIEW_REQUEST_SCHEMA = {
         "content": {"multipart/form-data": {"schema": {
             "type":"object", "required":["equipment_id", "source", "image"],
             "properties": {
-                "equipment_id":{"type":"integer", "minimum":1},
-                "source":{"type":"string", "enum":["CAMERA", "GALLERY"]},
-                "image":{"type":"string", "format":"binary"},
+                "equipment_id":{"type":"integer", "minimum":1, "description":"ID выбранного оборудования своего цеха из GET /equipment.", "example":125},
+                "source":{"type":"string", "enum":["CAMERA", "GALLERY"], "description":"Фото с камеры или из галереи.", "example":"CAMERA"},
+                "image":{"type":"string", "format":"binary", "description":"Один JPEG/PNG до 10 МиБ и 20 млн пикселей. Формат проверяется по байтам; EXIF-поворот нормализуется."},
             },
         }}},
     },

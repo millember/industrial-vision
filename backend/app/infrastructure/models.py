@@ -104,3 +104,62 @@ class Inspection(Base):
 
 Index("ix_inspections_equipment_created", Inspection.equipment_id, Inspection.created_at.desc(), Inspection.id.desc())
 Index("ix_inspections_processing_deadline", Inspection.processing_status, Inspection.deadline)
+
+
+class Issue(Base):
+    __tablename__ = "issues"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id"))
+    workshop_id: Mapped[int] = mapped_column(ForeignKey("workshops.id"))
+    defect_type_id: Mapped[int] = mapped_column(ForeignKey("defect_types.id"))
+    analysis_source: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("analysis_source IN ('MOCK', 'MODEL')", name="ck_issue_source"),)
+
+
+Index("uq_open_issue", Issue.equipment_id, Issue.workshop_id, Issue.defect_type_id, Issue.analysis_source,
+      unique=True, postgresql_where=Issue.closed_at.is_(None))
+
+
+class Report(Base):
+    __tablename__ = "reports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    inspection_id: Mapped[int] = mapped_column(ForeignKey("inspections.id"), index=True)
+    issue_id: Mapped[int] = mapped_column(ForeignKey("issues.id"))
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    workshop_id: Mapped[int] = mapped_column(ForeignKey("workshops.id"))
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id"))
+    comment: Mapped[str] = mapped_column(String(2000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    body: Mapped[dict] = mapped_column(JSONB)
+
+
+class ReportRequest(Base):
+    __tablename__ = "report_requests"
+    __table_args__ = (UniqueConstraint("author_id", "inspection_id", "key", name="uq_report_request"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    inspection_id: Mapped[int] = mapped_column(ForeignKey("inspections.id"))
+    key: Mapped[str] = mapped_column(String(36))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    response_status: Mapped[int] = mapped_column(Integer)
+    body: Mapped[dict] = mapped_column(JSONB)
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+    __table_args__ = (UniqueConstraint("issue_id", "recipient_id", name="uq_notification_issue_recipient"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("reports.id"))
+    issue_id: Mapped[int] = mapped_column(ForeignKey("issues.id"))
+    recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    workshop_id: Mapped[int] = mapped_column(ForeignKey("workshops.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str] = mapped_column(Text)
+    analysis_source: Mapped[str] = mapped_column(String(8))
+
+
+Index("ix_notifications_recipient_created", Notification.recipient_id, Notification.created_at.desc(), Notification.id.desc())

@@ -3,7 +3,15 @@
   "inspection_id": 501,
   "issue_id": 18,
   "author_id": 7,
+  "author_name": "Иванов И.И.",
   "workshop_id": 1,
+  "equipment_id": 125,
   "created_at": "2026-11-13T11:32:00Z",
-  "notification_status": "QUEUED"
+  "comment": "Прошу проверить крепление на макете.",
+  "status": "WARNING",
+  "defect_id": 2,
+  "analysis_source": "MOCK",
+  "review_status": "UNREVIEWED",
+  "notification_status": "CREATED",
+  "notification_count": 2
 }

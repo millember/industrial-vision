@@ -26,8 +26,9 @@ from app.domain.errors import AnalysisError
 from .uploads import read_photo, PREVIEW_REQUEST_SCHEMA
 from .schemas import PreviewOut
 from .schemas import InspectionOut, HistoryOut
+from .schemas import NewReport, ReportOut, NotificationOut, NotificationsOut, NotificationUpdate
 from app.application.dtos.inspections import ERROR_STATUS
-from fastapi import Query
+from fastapi import Query, Header
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from uuid import UUID
@@ -44,7 +45,7 @@ def public_user(user: Account):
 
 def inspection_path(request: Request) -> bool:
     path = request.url.path.split("/api/v1/", 1)[-1]
-    return path == "inspections" or path.startswith(("inspections/", "photos/")) or bool(re.fullmatch(r"equipment/[^/]+/inspections", path))
+    return path in ("inspections", "notifications") or path.startswith(("inspections/", "photos/", "reports/", "notifications/")) or bool(re.fullmatch(r"equipment/[^/]+/inspections", path))
 
 
 
@@ -212,6 +213,30 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
                            limit: Annotated[int, Query(ge=1, le=100)] = 20,
                            offset: Annotated[int, Query(ge=0)] = 0):
         return request.app.state.services.inspections.history(equipment_id=equipment_id, actor=user, limit=limit, offset=offset)
+
+    @app.post("/api/v1/inspections/{inspection_id}/reports", response_model=ReportOut, status_code=201)
+    def create_report(inspection_id: int, body: NewReport, request: Request, user: Member,
+                      idempotency_key: Annotated[UUID, Header(alias="Idempotency-Key")]):
+        if getattr(request.state, "renewed_cookie", None):
+            csrf(request)
+        result = request.app.state.services.reporting.create(inspection_id=inspection_id, actor=user,
+                                                             key=str(idempotency_key), comment=body.comment)
+        return JSONResponse(result.body, status_code=result.status)
+
+    @app.get("/api/v1/reports/{report_id}", response_model=ReportOut)
+    def report(report_id: int, request: Request, user: Member):
+        return request.app.state.services.reporting.report(report_id=report_id, actor=user)
+
+    @app.get("/api/v1/notifications", response_model=NotificationsOut)
+    def notifications(request: Request, user: Member, limit: Annotated[int, Query(ge=1, le=100)] = 20,
+                      offset: Annotated[int, Query(ge=0)] = 0, unread_only: bool = False):
+        return request.app.state.services.reporting.notifications(actor=user, limit=limit, offset=offset, unread_only=unread_only)
+
+    @app.patch("/api/v1/notifications/{notification_id}", response_model=NotificationOut)
+    def mark_notification(notification_id: int, body: NotificationUpdate, request: Request, user: Member):
+        if getattr(request.state, "renewed_cookie", None):
+            csrf(request)
+        return request.app.state.services.reporting.mark_notification(notification_id=notification_id, actor=user, is_read=body.is_read)
 
     @app.get("/api/v1/keys", response_model=list[KeyOut])
     def keys(request: Request, user: Admin): return request.app.state.services.queries.keys(actor_id=user.id)

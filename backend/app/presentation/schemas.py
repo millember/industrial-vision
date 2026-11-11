@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, field_serializer
 
 class Login(BaseModel):
     login: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_.-]+$")
@@ -89,6 +89,15 @@ class PreviewOut(BaseModel):
 
 
 class InspectionOut(PreviewOut):
+    status: Literal["OK", "WARNING", "CRITICAL", "UNKNOWN"]
+    color: Literal["GREEN", "ORANGE", "RED", "GRAY"]
+    analysis_source: Literal["MOCK", "MODEL"]
+    model_version: str | None
+    review_status: Literal["UNREVIEWED", "CONFIRMED", "REJECTED"]
+    defect_id: int | None
+    defect_code: str | None
+    box: tuple[int, int, int, int] | None
+    confidence: float | None = Field(ge=0, le=1)
     inspection_id: int
     photo_id: int
     author_id: int
@@ -121,3 +130,54 @@ class HistoryOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class NewReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    comment: str = Field(default="", max_length=2000)
+
+
+class ReportOut(BaseModel):
+    report_id: int
+    inspection_id: int
+    issue_id: int
+    author_id: int
+    author_name: str
+    workshop_id: int
+    equipment_id: int
+    created_at: datetime
+    comment: str
+    status: Literal["WARNING", "CRITICAL"]
+    defect_id: int
+    analysis_source: Literal["MOCK", "MODEL"]
+    review_status: Literal["UNREVIEWED", "CONFIRMED"]
+    notification_status: Literal["CREATED", "GROUPED", "NO_RECIPIENTS"]
+    notification_count: int
+
+
+class NotificationOut(BaseModel):
+    id: int
+    report_id: int
+    issue_id: int
+    created_at: datetime
+    is_read: bool
+    read_at: datetime | None
+    message: str
+    analysis_source: Literal["MOCK", "MODEL"]
+
+    @field_serializer("created_at", "read_at")
+    def utc_time(self, value: datetime | None) -> str | None:
+        from datetime import timezone
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if value is not None else None
+
+
+class NotificationsOut(BaseModel):
+    items: list[NotificationOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class NotificationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    is_read: bool = Field(strict=True)

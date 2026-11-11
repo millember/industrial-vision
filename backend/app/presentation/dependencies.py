@@ -11,6 +11,9 @@ from app.application.use_case.inspections import InspectionsUseCase
 from app.infrastructure.inspections import PostgresInspectionRepository
 from app.infrastructure.queries.inspections import PostgresInspectionQueries
 from app.infrastructure.photo_storage import photo_storages
+from app.application.use_case.reporting import ReportingUseCase
+from app.infrastructure.reporting import PostgresReportingRepository
+from app.infrastructure.queries.reporting import PostgresReportingQueries
 
 @dataclass(frozen=True)
 class Services:
@@ -22,6 +25,7 @@ class Services:
     queries: AdminQueriesUseCase
     preview: PreviewInspectionUseCase
     inspections: InspectionsUseCase
+    reporting: ReportingUseCase
 
 def create_services(*, session_factory, analysis_mode: str = "disabled") -> Services:
     if analysis_mode not in ("disabled", "mock"):
@@ -45,4 +49,5 @@ def create_services(*, session_factory, analysis_mode: str = "disabled") -> Serv
         inspections=InspectionsUseCase(catalogue=queries, records=records,
                                       queries=PostgresInspectionQueries(session_factory, records), analyzer=preview,
                                       storage_backend=storage_backend, storages=storages),
+        reporting=ReportingUseCase(records=PostgresReportingRepository(session_factory), queries=PostgresReportingQueries(session_factory)),
     )

@@ -15,7 +15,8 @@ PASSWORD = "Example-Test-Password-2026!"
 HEADERS = {"Origin":"http://testserver","X-IV-Client":"browser"}
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    monkeypatch.setenv("ANALYSIS_MODE", "mock")
     url=os.environ["IV_TEST_DATABASE_URL"]
     assert url.split("/")[-1] == "iv_step2_test", "Only the isolated test database may be reset"
     with TestClient(create_app(url,secure=False,origin="http://testserver"),base_url="http://testserver") as client:
@@ -206,3 +207,119 @@ def test_equipment_card_and_knowledge_access(client, role):
     else:
         assert other.status_code == 404 and other.json() == missing.json()
     assert client.get("/api/v1/defect-types", headers=headers).json() == defects
+
+@pytest.fixture
+def preview_upload(client):
+    from io import BytesIO
+    from PIL import Image
+    admin(client)
+    workshop = client.post("/api/v1/workshops", json={"name":"Цех"}, headers=HEADERS).json()["id"]
+    typ = client.post("/api/v1/equipment-types", json={"name":"Макет"}, headers=HEADERS).json()["id"]
+    equipment = client.post("/api/v1/equipment", json={"name":"Макет", "inventory_number":"PREVIEW",
+                            "workshop_id":workshop, "type_id":typ}, headers=HEADERS).json()["id"]
+    image = BytesIO()
+    Image.new("RGB", (32, 24)).save(image, format="PNG")
+    return equipment, image.getvalue()
+
+
+@pytest.mark.parametrize("source", ["CAMERA", "GALLERY"])
+def test_photo_preview(client, preview_upload, source):
+    equipment, image = preview_upload
+    # The decoded bytes determine the image type, not filename or MIME.
+    response = client.post("/api/v1/inspections/preview", data={"equipment_id":equipment, "source":source},
+                           files={"image":("photo.txt", image, "application/octet-stream")}, headers=HEADERS)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["equipment_id"] == equipment
+    assert result["analysis_source"] == "MOCK" and result["model_version"] is None
+    assert result["status"] == "UNKNOWN" and result["color"] == "GRAY"
+    assert result["image"] == {"width":32, "height":24}
+    assert "inspection_id" not in result and "photo_id" not in result
+
+
+@pytest.mark.parametrize("data,content,expected,code", [
+    ({"source":"FILE"}, None, 422, "VALIDATION_ERROR"),
+    ({"equipment_id":"0"}, None, 422, "VALIDATION_ERROR"),
+    ({"extra":"ignored?"}, None, 422, "VALIDATION_ERROR"),
+    ({}, b"", 422, "INVALID_IMAGE"),
+    ({}, b"\xff\xd8broken", 422, "INVALID_IMAGE"),
+    ({}, b"not an image", 415, "UNSUPPORTED_IMAGE_TYPE"),
+])
+def test_photo_preview_rejects_bad_input(client, preview_upload, data, content, expected, code):
+    equipment, image = preview_upload
+    response = client.post("/api/v1/inspections/preview",
+                           data={"equipment_id":equipment, "source":"CAMERA", **data},
+                           files={"image":("photo.png", image if content is None else content, "image/png")}, headers=HEADERS)
+    assert response.status_code == expected
+    assert response.json()["error"]["code"] == code
+
+
+def test_photo_preview_authentication_and_csrf(client, preview_upload):
+    equipment, image = preview_upload
+    data = {"equipment_id":equipment, "source":"CAMERA"}
+    files = {"image":("photo.png", image, "image/png")}
+    response = client.post("/api/v1/inspections/preview", data=data, files=files)
+    assert response.status_code == 403 and response.json()["error"]["code"] == "FORBIDDEN"
+    response = client.post("/api/v1/inspections/preview", data=data, files=files,
+                           headers={"Authorization":"Basic invalid"})
+    assert response.status_code == 403
+    client.cookies.clear()
+    response = client.post("/api/v1/inspections/preview", data=data, files=files)
+    assert response.status_code == 401 and response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+def test_photo_preview_cross_workshop_is_hidden(client, preview_upload):
+    equipment, image = preview_upload
+    workshop = client.post("/api/v1/workshops", json={"name":"Другой цех"}, headers=HEADERS).json()["id"]
+    user = {"login":"worker", "password":PASSWORD, "full_name":"Рабочий", "role":"WORKER", "workshop_id":workshop}
+    assert client.post("/api/v1/users", json=user, headers=HEADERS).status_code == 201
+    token = client.post("/api/v1/auth/token", json={"login":"worker", "password":PASSWORD}).json()["access_token"]
+    client.cookies.clear()
+    headers = {"Authorization":"Bearer " + token}
+    responses = [client.post("/api/v1/inspections/preview", data={"equipment_id":i, "source":"GALLERY"},
+                             files={"image":("photo.png", b"invalid image", "image/png")}, headers=headers)
+                 for i in (equipment, 999999)]
+    assert all(r.status_code == 404 for r in responses)
+    assert responses[0].json() == responses[1].json()
+    # Giving the employee equipment in their own workshop permits preview.
+    admin(client)
+    own = client.post("/api/v1/equipment", json={"name":"Свой макет", "inventory_number":"OWN",
+                      "workshop_id":workshop, "type_id":1}, headers=HEADERS).json()["id"]
+    client.cookies.clear()
+    assert client.post("/api/v1/inspections/preview", data={"equipment_id":own, "source":"GALLERY"},
+                       files={"image":("photo.png", image, "image/png")}, headers=headers).status_code == 200
+
+
+def test_photo_preview_requires_explicit_mock_mode(client, preview_upload, monkeypatch):
+    equipment, image = preview_upload
+    token = client.post("/api/v1/auth/token", json={"login":"admin", "password":PASSWORD}).json()["access_token"]
+    monkeypatch.delenv("ANALYSIS_MODE")
+    with TestClient(create_app(os.environ["IV_TEST_DATABASE_URL"]), base_url="http://testserver") as disabled:
+        response = disabled.post("/api/v1/inspections/preview", data={"equipment_id":equipment, "source":"CAMERA"},
+                                 files={"image":("photo.png", image, "image/png")},
+                                 headers={"Authorization":"Bearer " + token})
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "MODEL_UNAVAILABLE"
+
+
+def test_photo_preview_limits_chunked_body(client, preview_upload):
+    from app.presentation.uploads import MAX_MULTIPART_BYTES
+    # No Content-Length: the limit must be enforced against the actual body.
+    response = client.post("/api/v1/inspections/preview", content=iter([b"x" * (MAX_MULTIPART_BYTES + 1)]),
+                           headers={**HEADERS, "Content-Type":"multipart/form-data; boundary=test"})
+    assert response.status_code == 413 and response.json()["error"]["code"] == "IMAGE_TOO_LARGE"
+
+
+def test_photo_preview_limits_file_bytes(client, preview_upload):
+    from app.application.dtos.analysis import MAX_IMAGE_BYTES
+    equipment, image = preview_upload
+    content = image + b"x" * (MAX_IMAGE_BYTES + 1 - len(image))
+    response = client.post("/api/v1/inspections/preview", data={"equipment_id":equipment, "source":"CAMERA"},
+                           files={"image":("photo.png", content, "image/png")}, headers=HEADERS)
+    assert response.status_code == 413 and response.json()["error"]["code"] == "IMAGE_TOO_LARGE"
+
+
+def test_photo_preview_malformed_multipart(client, preview_upload):
+    response = client.post("/api/v1/inspections/preview", content=b"not-a-boundary\r\n",
+                           headers={**HEADERS, "Content-Type":"multipart/form-data; boundary=test"})
+    assert response.status_code == 422 and response.json()["error"]["code"] == "VALIDATION_ERROR"

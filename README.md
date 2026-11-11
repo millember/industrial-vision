@@ -1,4 +1,4 @@
-# Industrial Vision — шаг 4 backend
+# Industrial Vision — шаг 5 backend
 
 FastAPI + PostgreSQL 17 + React/TypeScript. Зависимости backend — uv, frontend — npm lock.
 
@@ -40,6 +40,16 @@ POST /api/v1/auth/login создаёт HttpOnly/Secure/SameSite=Strict cookie н
 
 Сотрудник читает карточки только своего цеха, администратор — всех цехов. Чужой и несуществующий ID дают одинаковый `404` с `{"detail":"Оборудование не найдено"}`; без авторизации — `401`.
 Карточка пока не содержит результатов осмотров: их сохранение и чтение относятся к следующим шагам.
+
+## Предварительный анализ фото — шаг 5
+
+`POST /api/v1/inspections/preview` принимает multipart `equipment_id`, `source` (`CAMERA`/`GALLERY`) и один файл `image`. Нужен Bearer-токен; для входа через cookie нужны также `Origin` и `X-IV-Client: browser`. Проверяются права на цех, фактический формат JPEG/PNG, целостность, размер до 10 МиБ и до 20 млн пикселей. EXIF-поворот применяется перед адаптером, метаданные удаляются. Многокадровые изображения не принимаются. Общий multipart-запрос ограничен 10 МиБ + 64 КиБ, в том числе без Content-Length.
+
+Для демонстрации явно задайте `ANALYSIS_MODE=mock` в окружении backend (для Compose — в `.env`). По умолчанию `disabled`: API возвращает `503 MODEL_UNAVAILABLE`. Другие значения останавливают запуск с ошибкой конфигурации.
+
+В mock-режиме ответ `200` содержит `analysis_source: MOCK`, `model_version: null`, `status: UNKNOWN`, `color: GRAY`, размеры нормализованного снимка и объяснение заглушки. Распознавание не выполняется. Фото и осмотры не сохраняются, `inspection_id` и `photo_id` отсутствуют, повторы не создают записей. `POST /api/v1/inspections` с сохранением и `201` остаётся будущим маршрутом.
+
+Ошибки preview возвращаются как `{"error":{"code":"…","message":"…"}}`: 401 — авторизация, 403 — источник браузерного запроса, 404 — оборудование не найдено или чужой цех, 413 — превышение лимита, 415 — неподдерживаемый формат, 422 — повреждённое фото или неверные поля. Реальная модель — шаг 6, сохранение и история — шаг 7.
 
 ## Сервер
 
@@ -84,7 +94,7 @@ Dev frontend проксирует API на 127.0.0.1:8000. Production образ
 backend/tests/test_access.py запускается только с IV_TEST_DATABASE_URL, указывающим на изолированную БД iv_step2_test (таблицы очищаются перед тестами).
 
 ```bash
-uv run --directory backend python -m pytest tests/test_access.py -q
+uv run --directory backend python -m pytest tests -q
 npm run build --prefix frontend
 go test -parallel 4 deploy/start.go deploy/start_test.go
 go vet deploy/start.go

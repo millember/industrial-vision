@@ -61,3 +61,28 @@ class EquipmentOut(NewEquipment):
     id:int
 class DefectOut(NewDefect):
     id:int
+
+
+class ImageSizeOut(BaseModel):
+    width: int = Field(gt=0)
+    height: int = Field(gt=0)
+
+
+class PreviewOut(BaseModel):
+    equipment_id: int
+    object: str
+    source: Literal["CAMERA", "GALLERY"]
+    created_at: datetime
+    image: ImageSizeOut
+    reason: str
+    status: Literal["UNKNOWN"]
+    color: Literal["GRAY"]
+    defect: str
+    recommendation: str
+    analysis_source: Literal["MOCK"]
+    review_status: Literal["UNREVIEWED"]
+    model_version: None
+    defect_id: None
+    defect_code: None
+    box: None
+    confidence: None

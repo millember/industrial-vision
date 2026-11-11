@@ -19,6 +19,12 @@ from app.infrastructure.passwords import Passwords
 from .dependencies import create_services
 from app.domain.errors import InvalidInput, Missing
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.concurrency import run_in_threadpool
+from app.domain.errors import AnalysisError
+from .uploads import read_photo, PREVIEW_REQUEST_SCHEMA
+from .schemas import PreviewOut
 
 COOKIE = "iv_admin_session"
 bearer = HTTPBearer(auto_error=False, scheme_name="AccessToken")
@@ -43,11 +49,25 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
         engine = make_engine(url or database_url())
         try:
             migrate(engine)
-            app.state.services = create_services(session_factory=sessions(engine))
+            app.state.services = create_services(session_factory=sessions(engine), analysis_mode=os.getenv("ANALYSIS_MODE", "disabled"))
             yield
         finally:
             engine.dispose()
     app = FastAPI(title="Industrial Vision API", root_path=root_path, docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+
+    @app.exception_handler(AnalysisError)
+    async def analysis_error(request, exc):
+        status = {"VALIDATION_ERROR":422, "INVALID_IMAGE":422, "UNSUPPORTED_IMAGE_TYPE":415,
+                  "IMAGE_TOO_LARGE":413, "NOT_FOUND":404, "MODEL_UNAVAILABLE":503,
+                  "MODEL_INVALID_RESPONSE":502}[exc.code]
+        return JSONResponse({"error":{"code":exc.code, "message":str(exc)}}, status_code=status)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error(request, exc):
+        if request.url.path.endswith("/api/v1/inspections/preview") and exc.status_code in (401, 403):
+            code = "UNAUTHENTICATED" if exc.status_code == 401 else "FORBIDDEN"
+            return JSONResponse({"error":{"code":code, "message":exc.detail}}, status_code=exc.status_code, headers=exc.headers)
+        return await http_exception_handler(request, exc)
 
     @app.exception_handler(IntegrityError)
     async def integrity_error(request, exc):
@@ -135,6 +155,15 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
 
     @app.get("/api/v1/health")
     def health(user: Member): return {"status":"ok"}
+
+    @app.post("/api/v1/inspections/preview", response_model=PreviewOut, openapi_extra=PREVIEW_REQUEST_SCHEMA)
+    async def preview(request: Request, user: Member):
+        if getattr(request.state, "renewed_cookie", None):
+            csrf(request)
+        fields, content = await read_photo(request)
+        return await run_in_threadpool(request.app.state.services.preview.execute,
+                                       equipment_id=fields.equipment_id, source=fields.source,
+                                       content=content, actor=user)
 
     @app.get("/api/v1/keys", response_model=list[KeyOut])
     def keys(request: Request, user: Admin): return request.app.state.services.queries.keys(actor_id=user.id)

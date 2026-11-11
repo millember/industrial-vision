@@ -13,6 +13,8 @@ services:
       ALLOWED_ORIGIN: "https://pet.oppennec.ru"
       ROOT_PATH: /industrial-vision
       APP_NAME: "${APP_NAME:-Industrial Vision API}"
+      # Explicit demo mode; no model or mock fallback is enabled by default.
+      ANALYSIS_MODE: "${ANALYSIS_MODE:-disabled}"
     depends_on:
       database:
         condition: service_healthy

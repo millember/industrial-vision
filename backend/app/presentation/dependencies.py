@@ -4,6 +4,9 @@ from app.application.use_case.administration import CreateUserUseCase, IssueKeyU
 from app.infrastructure.passwords import Passwords
 from app.infrastructure.repository import Repository
 from app.infrastructure.queries.admin import AdminQueries
+from app.application.use_case.preview import PreviewInspectionUseCase
+from app.infrastructure.images import PillowImageDecoder
+from app.infrastructure.mock_model import MockModelAdapter
 
 @dataclass(frozen=True)
 class Services:
@@ -13,8 +16,11 @@ class Services:
     revoke_key: RevokeKeyUseCase
     catalogue: CatalogueCreateUseCase
     queries: AdminQueriesUseCase
+    preview: PreviewInspectionUseCase
 
-def create_services(*, session_factory) -> Services:
+def create_services(*, session_factory, analysis_mode: str = "disabled") -> Services:
+    if analysis_mode not in ("disabled", "mock"):
+        raise ValueError("ANALYSIS_MODE must be disabled or mock")
     repository=Repository(session_factory)
     passwords=Passwords()
     return Services(
@@ -24,4 +30,6 @@ def create_services(*, session_factory) -> Services:
         revoke_key=RevokeKeyUseCase(keys=repository),
         catalogue=CatalogueCreateUseCase(records=repository),
         queries=AdminQueriesUseCase(queries=AdminQueries(session_factory)),
+        preview=PreviewInspectionUseCase(queries=AdminQueries(session_factory), images=PillowImageDecoder(),
+                                         model=MockModelAdapter() if analysis_mode == "mock" else None),
     )

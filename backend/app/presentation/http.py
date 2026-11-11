@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from .schemas import Login, NewUser, Named, NewKey, NewEquipment, NewDefect, AccountOut, UserOut, KeyOut, IssuedKeyOut, NamedOut, EquipmentOut, DefectOut
 from sqlalchemy.exc import IntegrityError
-from app.application.auth import AuthService, InvalidLogin, LoginLimited, digest
+from app.application.auth import AuthService, InvalidLogin, LoginLimited, digest, SESSION_TTL_SECONDS
 from app.application.contracts import Account
 from app.infrastructure.database import make_engine, migrate, sessions, database_url
 from app.infrastructure.passwords import Passwords
@@ -62,6 +62,9 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
     @app.middleware("http")
     async def private_cache(request, call_next):
         response = await call_next(request)
+        renewed_cookie = getattr(request.state, "renewed_cookie", None)
+        if renewed_cookie and response.status_code < 400:
+            response.set_cookie(COOKIE, renewed_cookie, max_age=SESSION_TTL_SECONDS, httponly=True, secure=cookie_secure, samesite="strict", path=(root_path or "")+"/")
         if request.url.path != "/healthz":
             response.headers["Cache-Control"] = "no-store"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -75,6 +78,7 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
         user = request.app.state.services.auth.authenticate(request.cookies.get(COOKIE, ""), "session")
         if not user: raise HTTPException(401, "Войдите как администратор")
         if user.role != "ADMIN": raise HTTPException(403, "Требуется администратор")
+        request.state.renewed_cookie = request.cookies[COOKIE]
         return user
 
     def principal(request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer)]) -> Account:
@@ -84,6 +88,8 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
         else:
             user = request.app.state.services.auth.authenticate(request.cookies.get(COOKIE, ""), "session")
         if not user: raise HTTPException(401, "Требуется авторизация", headers={"WWW-Authenticate":"Bearer"})
+        if not credentials:
+            request.state.renewed_cookie = request.cookies[COOKIE]
         return user
 
     Admin = Annotated[Account, Depends(administrator)]
@@ -108,13 +114,13 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
             raise HTTPException(403, "Веб-кабинет доступен только администратору")
         old = request.cookies.get(COOKIE)
         if old: request.app.state.services.auth.logout(old)
-        response.set_cookie(COOKIE, token, max_age=28800, httponly=True, secure=cookie_secure, samesite="strict", path=(root_path or "")+"/")
+        response.set_cookie(COOKIE, token, max_age=SESSION_TTL_SECONDS, httponly=True, secure=cookie_secure, samesite="strict", path=(root_path or "")+"/")
         return public_user(user)
 
     @app.post("/api/v1/auth/token")
     def mobile_login(body: Login, request: Request):
         user, token = do_login(request, body)
-        return {"access_token":token,"token_type":"bearer","expires_in":28800,"user":public_user(user)}
+        return {"access_token":token,"token_type":"bearer","expires_in":SESSION_TTL_SECONDS,"user":public_user(user)}
 
     @app.get("/api/v1/auth/me", response_model=AccountOut)
     def admin_me(user: Admin): return public_user(user)

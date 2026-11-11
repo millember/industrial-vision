@@ -5,6 +5,9 @@ from threading import Semaphore
 from typing import Protocol
 from .contracts import AuthStore, Account
 
+SESSION_TTL = timedelta(hours=24)
+SESSION_TTL_SECONDS = int(SESSION_TTL.total_seconds())
+
 class Passwords(Protocol):
     def hash(self, password: str) -> str: ...
     def verify(self, password: str, hashed: str) -> bool: ...
@@ -32,13 +35,14 @@ class AuthService:
             raise InvalidLogin()
         self.store.reset_attempts(login)
         raw = "iv_s_" + secrets.token_urlsafe(40)
-        self.store.add_session(user.id, digest(raw), now + timedelta(hours=8))
+        self.store.add_session(user.id, digest(raw), now + SESSION_TTL)
         return user, raw
 
     def authenticate(self, raw: str, kind: str) -> Account | None:
         prefix = "iv_s_" if kind == "session" else "iv_k_"
         if not raw.startswith(prefix) or len(raw) > 128: return None
-        return self.store.identify(digest(raw), kind, datetime.now(timezone.utc))
+        now = datetime.now(timezone.utc)
+        return self.store.identify(digest(raw), kind, now, now + SESSION_TTL)
 
     def logout(self, raw: str) -> None:
         self.store.remove_session(digest(raw))

@@ -1,12 +1,14 @@
 
 import os
+from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text, select
 from app.main import create_app
 from app.infrastructure.database import make_engine, sessions
 from app.infrastructure.repository import Repository
-from app.infrastructure.models import ApiKey, BrowserSession
+from app.infrastructure.models import ApiKey, BrowserSession, User
+from app.application.auth import digest
 from app.infrastructure.passwords import Passwords
 
 PASSWORD = "Example-Test-Password-2026!"
@@ -61,9 +63,12 @@ def test_issue_and_revoke_key(client):
     assert listed[0]["prefix"]==key["key"][:12] and "key" not in listed[0] and "digest" not in listed[0]
     with sessions(make_engine(os.environ["IV_TEST_DATABASE_URL"]))() as db:
         assert db.scalar(select(ApiKey)).digest != key["key"]
+        expires_at = db.scalar(select(ApiKey.expires_at))
     client.cookies.clear()
     headers={"Authorization":"Bearer "+key["key"]}
     assert client.get("/api/v1/health",headers=headers).status_code==200
+    with sessions(make_engine(os.environ["IV_TEST_DATABASE_URL"]))() as db:
+        assert db.scalar(select(ApiKey.expires_at)) == expires_at
     assert client.get("/docs",headers=headers).status_code==401
     assert client.post("/api/v1/keys",headers={**headers,**HEADERS},json={"name":"forbidden"}).status_code==401
     admin(client)
@@ -104,3 +109,53 @@ def test_secure_cookie(client):
     with TestClient(create_app(url,secure=True,origin="https://testserver"),base_url="https://testserver") as secure_client:
         r=secure_client.post("/api/v1/auth/login",json={"login":"admin","password":PASSWORD},headers={"Origin":"https://testserver","X-IV-Client":"browser"})
         assert r.status_code==200 and "secure" in r.headers["set-cookie"].lower()
+
+@pytest.mark.parametrize("mobile", [True, False], ids=["bearer", "cookie"])
+def test_session_lifetime_and_sliding_expiry(client, mobile):
+    before = datetime.now(timezone.utc)
+    if mobile:
+        response = client.post("/api/v1/auth/token", json={"login":"admin", "password":PASSWORD})
+        assert response.json()["expires_in"] == 86400
+        token = response.json()["access_token"]
+        headers = {"Authorization": "Bearer " + token}
+        path = "/api/v1/me"
+    else:
+        response = admin(client)
+        assert "Max-Age=86400" in response.headers["set-cookie"]
+        token = client.cookies.get("iv_admin_session")
+        headers = {}
+        path = "/docs"
+    engine = make_engine(os.environ["IV_TEST_DATABASE_URL"])
+    factory = sessions(engine)
+    with factory.begin() as db:
+        row = db.scalar(select(BrowserSession).where(BrowserSession.digest == digest(token)))
+        assert before + timedelta(hours=24) <= row.expires_at <= datetime.now(timezone.utc) + timedelta(hours=24)
+        row.expires_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+    before = datetime.now(timezone.utc)
+    renewed = client.get(path, headers=headers)
+    assert renewed.status_code == 200
+    if not mobile:
+        assert "Max-Age=86400" in renewed.headers["set-cookie"]
+        assert client.cookies.get("iv_admin_session") == token
+    with factory.begin() as db:
+        row = db.scalar(select(BrowserSession).where(BrowserSession.digest == digest(token)))
+        assert before + timedelta(hours=24) <= row.expires_at <= datetime.now(timezone.utc) + timedelta(hours=24)
+        expired_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        row.expires_at = expired_at
+    assert client.get(path, headers=headers).status_code == 401
+    with factory() as db:
+        assert db.scalar(select(BrowserSession.expires_at).where(BrowserSession.digest == digest(token))) == expired_at
+    engine.dispose()
+
+def test_inactive_user_cannot_renew_session(client):
+    response = client.post("/api/v1/auth/token", json={"login":"admin", "password":PASSWORD})
+    token = response.json()["access_token"]
+    engine = make_engine(os.environ["IV_TEST_DATABASE_URL"])
+    factory = sessions(engine)
+    with factory.begin() as db:
+        db.scalar(select(User).where(User.login == "admin")).active = False
+        original = db.scalar(select(BrowserSession.expires_at))
+    assert client.get("/api/v1/me", headers={"Authorization":"Bearer " + token}).status_code == 401
+    with factory() as db:
+        assert db.scalar(select(BrowserSession.expires_at)) == original
+    engine.dispose()

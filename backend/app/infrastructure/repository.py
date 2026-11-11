@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from sqlalchemy import select, delete, case
+from sqlalchemy import select, delete, case, update, func
 from sqlalchemy.dialects.postgresql import insert
 from app.application.contracts import Account
 from .models import User, BrowserSession, ApiKey, LoginAttempt, Audit, Workshop, EquipmentType, Equipment, DefectType
@@ -45,7 +45,21 @@ class Repository:
         with self.sessions.begin() as db:
             db.execute(delete(BrowserSession).where(BrowserSession.digest == digest))
 
-    def identify(self, digest, kind, now):
+    def identify(self, digest: str, kind: str, now: datetime, renew_until: datetime) -> Account | None:
+        if kind == "session":
+            with self.sessions.begin() as db:
+                user_id = db.scalar(
+                    update(BrowserSession)
+                    .where(
+                        BrowserSession.digest == digest,
+                        BrowserSession.expires_at > now,
+                        BrowserSession.user_id.in_(select(User.id).where(User.active.is_(True))),
+                    )
+                    .values(expires_at=func.greatest(BrowserSession.expires_at, renew_until))
+                    .returning(BrowserSession.user_id)
+                )
+                row = db.get(User, user_id) if user_id is not None else None
+                return account(row) if row else None
         token = BrowserSession if kind == "session" else ApiKey
         query = select(User).join(token, token.user_id == User.id).where(token.digest == digest, token.expires_at > now, User.active.is_(True))
         if kind != "session": query = query.where(ApiKey.revoked.is_(False))

@@ -7,6 +7,10 @@ from app.infrastructure.queries.admin import AdminQueries
 from app.application.use_case.preview import PreviewInspectionUseCase
 from app.infrastructure.images import PillowImageDecoder
 from app.infrastructure.mock_model import MockModelAdapter
+from app.application.use_case.inspections import InspectionsUseCase
+from app.infrastructure.inspections import PostgresInspectionRepository
+from app.infrastructure.queries.inspections import PostgresInspectionQueries
+from app.infrastructure.photo_storage import photo_storages
 
 @dataclass(frozen=True)
 class Services:
@@ -17,12 +21,19 @@ class Services:
     catalogue: CatalogueCreateUseCase
     queries: AdminQueriesUseCase
     preview: PreviewInspectionUseCase
+    inspections: InspectionsUseCase
 
 def create_services(*, session_factory, analysis_mode: str = "disabled") -> Services:
     if analysis_mode not in ("disabled", "mock"):
         raise ValueError("ANALYSIS_MODE must be disabled or mock")
     repository=Repository(session_factory)
     passwords=Passwords()
+    queries = AdminQueries(session_factory)
+    preview = PreviewInspectionUseCase(queries=queries, images=PillowImageDecoder(),
+                                      model=MockModelAdapter() if analysis_mode == "mock" else None)
+    records = PostgresInspectionRepository(session_factory)
+    records.recover_stale()
+    storage_backend, storages = photo_storages()
     return Services(
         auth=AuthService(repository,passwords),
         users=CreateUserUseCase(users=repository,passwords=passwords),
@@ -30,6 +41,8 @@ def create_services(*, session_factory, analysis_mode: str = "disabled") -> Serv
         revoke_key=RevokeKeyUseCase(keys=repository),
         catalogue=CatalogueCreateUseCase(records=repository),
         queries=AdminQueriesUseCase(queries=AdminQueries(session_factory)),
-        preview=PreviewInspectionUseCase(queries=AdminQueries(session_factory), images=PillowImageDecoder(),
-                                         model=MockModelAdapter() if analysis_mode == "mock" else None),
+        preview=preview,
+        inspections=InspectionsUseCase(catalogue=queries, records=records,
+                                      queries=PostgresInspectionQueries(session_factory, records), analyzer=preview,
+                                      storage_backend=storage_backend, storages=storages),
     )

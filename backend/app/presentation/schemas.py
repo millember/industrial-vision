@@ -86,3 +86,38 @@ class PreviewOut(BaseModel):
     defect_code: None
     box: None
     confidence: None
+
+
+class InspectionOut(PreviewOut):
+    inspection_id: int
+    photo_id: int
+    author_id: int
+    workshop_id: int
+
+
+class AnalysisErrorOut(BaseModel):
+    code: str
+    message: str
+
+
+class ErrorEnvelope(BaseModel):
+    error: AnalysisErrorOut
+
+
+class HistoryItemOut(BaseModel):
+    inspection_id: int
+    equipment_id: int
+    author_id: int
+    workshop_id: int
+    source: Literal["CAMERA", "GALLERY"]
+    created_at: datetime
+    processing_status: Literal["PROCESSING", "COMPLETED", "FAILED"]
+    result: InspectionOut | None
+    error: ErrorEnvelope | None
+
+
+class HistoryOut(BaseModel):
+    items: list[HistoryItemOut]
+    total: int
+    limit: int
+    offset: int

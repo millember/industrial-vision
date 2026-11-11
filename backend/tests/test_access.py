@@ -15,8 +15,10 @@ PASSWORD = "Example-Test-Password-2026!"
 HEADERS = {"Origin":"http://testserver","X-IV-Client":"browser"}
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     monkeypatch.setenv("ANALYSIS_MODE", "mock")
+    monkeypatch.setenv("PHOTO_STORAGE", "local")
+    monkeypatch.setenv("PHOTO_ROOT", str(tmp_path / "photos"))
     url=os.environ["IV_TEST_DATABASE_URL"]
     assert url.split("/")[-1] == "iv_step2_test", "Only the isolated test database may be reset"
     with TestClient(create_app(url,secure=False,origin="http://testserver"),base_url="http://testserver") as client:
@@ -323,3 +325,183 @@ def test_photo_preview_malformed_multipart(client, preview_upload):
     response = client.post("/api/v1/inspections/preview", content=b"not-a-boundary\r\n",
                            headers={**HEADERS, "Content-Type":"multipart/form-data; boundary=test"})
     assert response.status_code == 422 and response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_saved_inspection_survives_restart(client, preview_upload):
+    from uuid import uuid4
+    equipment, image = preview_upload
+    headers = {**HEADERS, "Idempotency-Key":str(uuid4())}
+    response = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                           files={"image":("photo.png", image, "image/png")}, headers=headers)
+    assert response.status_code == 201
+    result = response.json()
+    assert result["created_at"].endswith("Z")
+    assert result["analysis_source"] == "MOCK" and result["model_version"] is None
+    assert result["inspection_id"] > 0 and result["photo_id"] > 0
+    assert client.get(f"/api/v1/inspections/{result['inspection_id']}").json() == result
+    assert client.get(f"/api/v1/photos/{result['photo_id']}").status_code == 200
+    repeated = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                           files={"image":("another.png", image, "image/png")}, headers=headers)
+    assert repeated.status_code == 201 and repeated.json() == result
+    with TestClient(create_app(os.environ["IV_TEST_DATABASE_URL"], secure=False, origin="http://testserver"),
+                    base_url="http://testserver") as restarted:
+        admin(restarted)
+        assert restarted.get(f"/api/v1/inspections/{result['inspection_id']}").json() == result
+        assert restarted.get(f"/api/v1/photos/{result['photo_id']}").status_code == 200
+        history = restarted.get(f"/api/v1/equipment/{equipment}/inspections").json()
+        assert history["total"] == 1 and history["items"][0]["result"] == result
+
+
+def test_inspection_replays_failure_and_detects_changed_request(client, preview_upload):
+    from uuid import uuid4
+    equipment, image = preview_upload
+    headers = {**HEADERS, "Idempotency-Key":str(uuid4())}
+    data = {"equipment_id":equipment, "source":"CAMERA"}
+    failed = client.post("/api/v1/inspections", data=data, files={"image":("bad.jpg", b"\xff\xd8broken")}, headers=headers)
+    assert failed.status_code == 422
+    replay = client.post("/api/v1/inspections", data=data, files={"image":("bad.jpg", b"\xff\xd8broken")}, headers=headers)
+    assert replay.status_code == 422 and replay.json() == failed.json()
+    changed = client.post("/api/v1/inspections", data=data, files={"image":("good.png", image)}, headers=headers)
+    assert changed.status_code == 409 and changed.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+    history = client.get(f"/api/v1/equipment/{equipment}/inspections").json()
+    assert history["total"] == 1 and history["items"][0]["processing_status"] == "FAILED"
+    assert history["items"][0]["result"] is None
+
+
+def test_inspections_and_photos_are_scoped(client, preview_upload):
+    from uuid import uuid4
+    equipment, image = preview_upload
+    result = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                         files={"image":("photo.png", image)}, headers={**HEADERS, "Idempotency-Key":str(uuid4())}).json()
+    other_workshop = client.post("/api/v1/workshops", json={"name":"Другой цех"}, headers=HEADERS).json()["id"]
+    tokens = []
+    for login, workshop in (("own", result["workshop_id"]), ("other", other_workshop)):
+        assert client.post("/api/v1/users", json={"login":login, "password":PASSWORD, "full_name":login,
+                           "role":"WORKER", "workshop_id":workshop}, headers=HEADERS).status_code == 201
+        tokens.append(client.post("/api/v1/auth/token", json={"login":login, "password":PASSWORD}).json()["access_token"])
+    client.cookies.clear()
+    paths = [f"/api/v1/inspections/{result['inspection_id']}", f"/api/v1/photos/{result['photo_id']}",
+             f"/api/v1/equipment/{equipment}/inspections"]
+    for path in paths:
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"Authorization":"Bearer " + tokens[0]}).status_code == 200
+        forbidden = client.get(path, headers={"Authorization":"Bearer " + tokens[1]})
+        missing = client.get(path.rsplit("/", 1)[0] + "/999999" if not path.endswith("/inspections")
+                             else "/api/v1/equipment/999999/inspections", headers={"Authorization":"Bearer " + tokens[1]})
+        assert forbidden.status_code == missing.status_code == 404
+        assert forbidden.json() == missing.json()
+    denied = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                         files={"image":("photo.png", image)},
+                         headers={"Authorization":"Bearer " + tokens[1], "Idempotency-Key":str(uuid4())})
+    assert denied.status_code == 404
+
+
+def test_inspection_history_pagination_and_parallel_retries(client, preview_upload):
+    from uuid import uuid4
+    from concurrent.futures import ThreadPoolExecutor
+    equipment, image = preview_upload
+    token = client.post("/api/v1/auth/token", json={"login":"admin", "password":PASSWORD}).json()["access_token"]
+    client.cookies.clear()
+    headers = {"Authorization":"Bearer " + token, "Idempotency-Key":str(uuid4())}
+    def create():
+        return client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"GALLERY"},
+                           files={"image":("photo.png", image)}, headers=headers)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses = list(pool.map(lambda _:create(), range(4)))
+    assert all(r.status_code in (201, 409) for r in responses)
+    assert any(r.status_code == 201 for r in responses)
+    assert all(r.json()["error"]["code"] == "REQUEST_IN_PROGRESS" for r in responses if r.status_code == 409)
+    replay = create()
+    assert replay.status_code == 201
+    ids = [replay.json()["inspection_id"]]
+    for _ in range(2):
+        headers["Idempotency-Key"] = str(uuid4())
+        ids.append(create().json()["inspection_id"])
+    history = client.get(f"/api/v1/equipment/{equipment}/inspections?limit=1&offset=1", headers=headers)
+    assert history.status_code == 200
+    assert history.json()["total"] == 3 and history.json()["items"][0]["inspection_id"] == ids[1]
+    assert client.get(f"/api/v1/equipment/{equipment}/inspections?limit=101", headers=headers).status_code == 422
+    assert client.get(f"/api/v1/equipment/{equipment}/inspections?offset=-1", headers=headers).status_code == 422
+
+
+def test_storage_failure_is_saved_without_fallback(client, preview_upload):
+    from uuid import uuid4
+    from pathlib import Path
+    equipment, image = preview_upload
+    root = Path(os.environ["PHOTO_ROOT"])
+    root.rmdir()
+    root.write_text("storage unavailable")
+    headers = {**HEADERS, "Idempotency-Key":str(uuid4())}
+    response = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                           files={"image":("photo.png", image)}, headers=headers)
+    assert response.status_code == 503 and response.json()["error"]["code"] == "STORAGE_UNAVAILABLE"
+    root.unlink()
+    root.mkdir()
+    replay = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                         files={"image":("photo.png", image)}, headers=headers)
+    assert replay.status_code == 503 and replay.json() == response.json()
+    assert not list(root.iterdir())
+
+
+def test_interrupted_inspection_recovers_as_failed(client, preview_upload):
+    from uuid import uuid4
+    from sqlalchemy import update
+    from app.infrastructure.inspections import PostgresInspectionRepository
+    from app.infrastructure.models import Inspection
+    equipment, _ = preview_upload
+    engine = make_engine(os.environ["IV_TEST_DATABASE_URL"])
+    factory = sessions(engine)
+    record, _ = PostgresInspectionRepository(factory).reserve(equipment_id=equipment, workshop_id=1,
+                         author_id=1, source="CAMERA", key=str(uuid4()), request_hash="a" * 64, storage_backend="local")
+    assert client.get(f"/api/v1/inspections/{record.id}").status_code == 409
+    with factory.begin() as db:
+        db.execute(update(Inspection).where(Inspection.id == record.id).values(deadline=datetime.now(timezone.utc) - timedelta(seconds=1)))
+    response = client.get(f"/api/v1/inspections/{record.id}")
+    assert response.status_code == 503 and response.json()["error"]["code"] == "ANALYSIS_INTERRUPTED"
+    with factory() as db:
+        row = db.get(Inspection, record.id)
+        assert row.processing_status == "FAILED" and row.cleanup_pending
+    engine.dispose()
+
+
+def test_saved_photo_is_normalized_and_survives_storage_selection_change(client, preview_upload, monkeypatch):
+    from io import BytesIO
+    from uuid import uuid4
+    from PIL import Image
+    equipment, _ = preview_upload
+    content = BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    with Image.new("RGB", (32, 24)) as image:
+        image.save(content, format="JPEG", exif=exif)
+    headers = {**HEADERS, "Idempotency-Key":str(uuid4())}
+    response = client.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                           files={"image":("photo.jpg", content.getvalue())}, headers=headers)
+    assert response.status_code == 201
+    result = response.json()
+    assert result["image"] == {"width":24, "height":32}
+    monkeypatch.setenv("PHOTO_STORAGE", "nextcloud")
+    monkeypatch.setenv("NEXTCLOUD_WEBDAV_URL", "https://unreachable.invalid/remote.php/dav/files/user/photos")
+    monkeypatch.setenv("NEXTCLOUD_USERNAME", "user")
+    monkeypatch.setenv("NEXTCLOUD_APP_PASSWORD", "test-app-password")
+    with TestClient(create_app(os.environ["IV_TEST_DATABASE_URL"], secure=False, origin="http://testserver"),
+                    base_url="http://testserver") as switched:
+        admin(switched)
+        photo = switched.get(f"/api/v1/photos/{result['photo_id']}")
+        assert photo.status_code == 200 and photo.headers["content-type"] == "image/jpeg"
+        assert photo.headers["cache-control"] == "no-store"
+        with Image.open(BytesIO(photo.content)) as normalized:
+            assert normalized.size == (24, 32) and not normalized.getexif()
+        repeated = switched.post("/api/v1/inspections", data={"equipment_id":equipment, "source":"CAMERA"},
+                                 files={"image":("photo.jpg", content.getvalue())}, headers=headers)
+        assert repeated.status_code == 201 and repeated.json() == result
+
+
+def test_saved_inspection_requires_key_and_browser_origin(client, preview_upload):
+    equipment, image = preview_upload
+    data, files = {"equipment_id":equipment, "source":"CAMERA"}, {"image":("photo.png", image)}
+    response = client.post("/api/v1/inspections", data=data, files=files, headers=HEADERS)
+    assert response.status_code == 422 and response.json()["error"]["code"] == "VALIDATION_ERROR"
+    response = client.post("/api/v1/inspections", data=data, files=files, headers={"Authorization":"Basic invalid"})
+    assert response.status_code == 403
+    assert client.get(f"/api/v1/equipment/{equipment}/inspections").json()["total"] == 0

@@ -1,5 +1,6 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, UniqueConstraint, CheckConstraint, Index
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
@@ -71,3 +72,35 @@ class Audit(Base):
     action: Mapped[str] = mapped_column(String(80))
     entity_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Inspection(Base):
+    __tablename__ = "inspections"
+    __table_args__ = (
+        UniqueConstraint("author_id", "idempotency_key", name="uq_inspection_author_key"),
+        CheckConstraint("processing_status IN ('PROCESSING', 'COMPLETED', 'FAILED')", name="ck_inspection_processing"),
+        CheckConstraint("source IN ('CAMERA', 'GALLERY')", name="ck_inspection_source"),
+        CheckConstraint("storage_backend IN ('local', 'nextcloud')", name="ck_inspection_storage"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    equipment_id: Mapped[int] = mapped_column(ForeignKey("equipment.id"))
+    workshop_id: Mapped[int] = mapped_column(ForeignKey("workshops.id"))
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    source: Mapped[str] = mapped_column(String(16))
+    idempotency_key: Mapped[str] = mapped_column(String(36))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    processing_status: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    photo_key: Mapped[str] = mapped_column(String(32), unique=True)
+    storage_backend: Mapped[str] = mapped_column(String(16))
+    media_type: Mapped[str | None] = mapped_column(String(32))
+    checksum: Mapped[str | None] = mapped_column(String(64))
+    result: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    error: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    cleanup_pending: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+Index("ix_inspections_equipment_created", Inspection.equipment_id, Inspection.created_at.desc(), Inspection.id.desc())
+Index("ix_inspections_processing_deadline", Inspection.processing_status, Inspection.deadline)

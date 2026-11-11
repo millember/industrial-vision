@@ -16,6 +16,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY --chown=10001:10001 backend/app ./app
 COPY --chown=10001:10001 backend/migrations ./migrations
 COPY --from=frontend --chown=10001:10001 /site/dist /app/frontend
+RUN mkdir -p /app/photos && chown 10001:10001 /app/photos && chmod 700 /app/photos
 USER 10001:10001
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -15,10 +15,17 @@ services:
       APP_NAME: "${APP_NAME:-Industrial Vision API}"
       # Explicit demo mode; no model or mock fallback is enabled by default.
       ANALYSIS_MODE: "${ANALYSIS_MODE:-disabled}"
+      PHOTO_STORAGE: "${PHOTO_STORAGE:-local}"
+      PHOTO_ROOT: /app/photos
+      NEXTCLOUD_WEBDAV_URL: "${NEXTCLOUD_WEBDAV_URL:-}"
+      NEXTCLOUD_USERNAME: "${NEXTCLOUD_USERNAME:-}"
+      NEXTCLOUD_APP_PASSWORD: "${NEXTCLOUD_APP_PASSWORD:-}"
     depends_on:
       database:
         condition: service_healthy
     read_only: true
+    volumes:
+      - photos-data:/app/photos
     tmpfs:
       - /tmp:size=16m,mode=1777
     cap_drop:
@@ -58,6 +65,8 @@ services:
     security_opt: [no-new-privileges:true]
 
 volumes:
+  photos-data:
+    name: industrial-vision-photos-data
   postgres-data:
     name: industrial-vision-postgres-data
 

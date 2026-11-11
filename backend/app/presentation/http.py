@@ -25,6 +25,13 @@ from starlette.concurrency import run_in_threadpool
 from app.domain.errors import AnalysisError
 from .uploads import read_photo, PREVIEW_REQUEST_SCHEMA
 from .schemas import PreviewOut
+from .schemas import InspectionOut, HistoryOut
+from app.application.dtos.inspections import ERROR_STATUS
+from fastapi import Query
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from uuid import UUID
+import re
 
 COOKIE = "iv_admin_session"
 bearer = HTTPBearer(auto_error=False, scheme_name="AccessToken")
@@ -33,6 +40,11 @@ def public_user(user: Account):
     result = asdict(user)
     result.pop("password_hash")
     return result
+
+
+def inspection_path(request: Request) -> bool:
+    path = request.url.path.split("/api/v1/", 1)[-1]
+    return path == "inspections" or path.startswith(("inspections/", "photos/")) or bool(re.fullmatch(r"equipment/[^/]+/inspections", path))
 
 
 
@@ -57,17 +69,21 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
 
     @app.exception_handler(AnalysisError)
     async def analysis_error(request, exc):
-        status = {"VALIDATION_ERROR":422, "INVALID_IMAGE":422, "UNSUPPORTED_IMAGE_TYPE":415,
-                  "IMAGE_TOO_LARGE":413, "NOT_FOUND":404, "MODEL_UNAVAILABLE":503,
-                  "MODEL_INVALID_RESPONSE":502}[exc.code]
+        status = ERROR_STATUS[exc.code]
         return JSONResponse({"error":{"code":exc.code, "message":str(exc)}}, status_code=status)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error(request, exc):
-        if request.url.path.endswith("/api/v1/inspections/preview") and exc.status_code in (401, 403):
+        if inspection_path(request) and exc.status_code in (401, 403):
             code = "UNAUTHENTICATED" if exc.status_code == 401 else "FORBIDDEN"
             return JSONResponse({"error":{"code":code, "message":exc.detail}}, status_code=exc.status_code, headers=exc.headers)
         return await http_exception_handler(request, exc)
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, exc):
+        if inspection_path(request):
+            return JSONResponse({"error":{"code":"VALIDATION_ERROR", "message":"Некорректные параметры запроса"}}, status_code=422)
+        return await request_validation_exception_handler(request, exc)
 
     @app.exception_handler(IntegrityError)
     async def integrity_error(request, exc):
@@ -164,6 +180,38 @@ def create_app(url: str | None = None, *, secure: bool | None = None, origin: st
         return await run_in_threadpool(request.app.state.services.preview.execute,
                                        equipment_id=fields.equipment_id, source=fields.source,
                                        content=content, actor=user)
+
+    @app.post("/api/v1/inspections", status_code=201, response_model=InspectionOut,
+              openapi_extra={**PREVIEW_REQUEST_SCHEMA, "parameters":[
+                  {"name":"Idempotency-Key", "in":"header", "required":True, "schema":{"type":"string", "format":"uuid"}}]})
+    async def create_inspection(request: Request, user: Member):
+        if getattr(request.state, "renewed_cookie", None):
+            csrf(request)
+        try:
+            key = str(UUID(request.headers.get("idempotency-key", "")))
+        except ValueError:
+            raise AnalysisError("VALIDATION_ERROR", "Нужен Idempotency-Key в формате UUID") from None
+        fields, content = await read_photo(request)
+        result = await run_in_threadpool(request.app.state.services.inspections.create,
+                                        equipment_id=fields.equipment_id, source=fields.source, content=content, key=key, actor=user)
+        return JSONResponse(result.body, status_code=result.status)
+
+    @app.get("/api/v1/inspections/{inspection_id}", response_model=InspectionOut)
+    def inspection(inspection_id: int, request: Request, user: Member):
+        result = request.app.state.services.inspections.get(inspection_id=inspection_id, actor=user)
+        return JSONResponse(result.body, status_code=result.status)
+
+    @app.get("/api/v1/photos/{photo_id}")
+    def photo(photo_id: int, request: Request, user: Member):
+        content, media_type = request.app.state.services.inspections.photo(photo_id=photo_id, actor=user)
+        extension = "jpg" if media_type == "image/jpeg" else "png"
+        return Response(content, media_type=media_type, headers={"Content-Disposition":f'inline; filename="inspection-{photo_id}.{extension}"'})
+
+    @app.get("/api/v1/equipment/{equipment_id}/inspections", response_model=HistoryOut)
+    def inspection_history(equipment_id: int, request: Request, user: Member,
+                           limit: Annotated[int, Query(ge=1, le=100)] = 20,
+                           offset: Annotated[int, Query(ge=0)] = 0):
+        return request.app.state.services.inspections.history(equipment_id=equipment_id, actor=user, limit=limit, offset=offset)
 
     @app.get("/api/v1/keys", response_model=list[KeyOut])
     def keys(request: Request, user: Admin): return request.app.state.services.queries.keys(actor_id=user.id)

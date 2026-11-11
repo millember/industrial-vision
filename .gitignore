@@ -36,3 +36,6 @@ Thumbs.db
 # Frontend dependencies and local database credentials
 node_modules/
 private.env
+
+# Local development photo storage
+var/photos/
